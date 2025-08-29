@@ -73,14 +73,44 @@ function send(obj) {
 function ensurePeerConnection() {
   if (pc) return;
 
-  pc = new RTCPeerConnection({
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-    ],
-  });
 
-  pc.onicecandidate = (e) => {
+
+
+
+pc = new RTCPeerConnection({
+  iceServers: [
+    // STUN (either your own or Google)
+    { urls: 'stun:turn.umikt-communication.tech:3478' },
+    { urls: 'stun:stun.l.google.com:19302' },
+
+    // TURN over UDP
+    {
+      urls: 'turn:turn.umikt-communication.tech:3478',
+      username: 'webrtcuser',
+      credential: 'r7Jw3nYvT+Q5sA1dHgkKqQ=='
+    },
+    // TURN over TCP (fallback when UDP blocked)
+    {
+      urls: 'turn:turn.umikt-communication.tech:3478?transport=tcp',
+      username: 'webrtcuser',
+      credential: 'r7Jw3nYvT+Q5sA1dHgkKqQ=='
+    },
+    // TURN over TLS (for strict networks)
+    {
+      urls: 'turns:turn.umikt-communication.tech:5349',
+      username: 'webrtcuser',
+      credential: 'r7Jw3nYvT+Q5sA1dHgkKqQ=='
+    }
+  ],
+  // This line forces the browser to only use TURN servers
+  iceTransportPolicy: "relay"
+});
+
+
+
+
+
+ pc.onicecandidate = (e) => {
     if (e.candidate) {
       send({ type: 'ice', candidate: e.candidate, from: myId });
     }
