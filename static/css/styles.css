@@ -1,0 +1,6 @@
+body { font-family: system-ui, sans-serif; }
+.row { display: flex; gap: 16px; align-items: flex-start; }
+video { width: 48%; max-height: 60vh; background:#000; border:1px solid #ccc; border-radius:8px; }
+.controls { margin-top: 12px; display:flex; gap:8px; flex-wrap: wrap; }
+button { padding: 8px 12px; cursor: pointer; }
+.status { margin-top: 8px; font-size: 14px; color:#666; }

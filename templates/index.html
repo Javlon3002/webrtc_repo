@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>WebRTC Communication</title>
+    {% load static %}
+    <link rel="stylesheet" href="{% static 'css/styles.css' %}">
+    <link rel="icon" href="{% static 'favicon.ico' %}">
+
+</head>
+<body>
+
+<h2>Real-time Video Chat</h2>
+<video id="localVideo" autoplay muted playsinline></video>
+<video id="remoteVideo" autoplay playsinline></video>
+
+<br>
+
+<button id="joinBtn">Join</button>
+<button id="leaveBtn" disabled>Leave</button>
+<button id="muteBtn" disabled>Mute</button>
+<button id="cameraBtn" disabled>Camera Off</button>
+
+<div class="status" id="status">idle</div>
+
+<script src="{% static 'js/app.js' %}"></script>
+</body>
+</html>
