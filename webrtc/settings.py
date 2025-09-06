@@ -15,12 +15,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 # Consider: SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
-SECRET_KEY = 'django-insecure-zo_duae^-o^0&jgm0ola2h%qb1@s%uzo45y*5++9o7cdv8t1s('
+SECRET_KEY = <YOUR_SECRET_KEY>
 
 # --- Production toggles ---
 DEBUG = False
 
-ALLOWED_HOSTS = ["umikt-communication.tech", "www.umikt-communication.tech", "20.40.152.176", "127.0.0.1", "localhost"]
+ALLOWED_HOSTS = ["your_domain.com", "www.your_domain.com", "your_global_VM_ip", "127.0.0.1", "localhost"]
 
 
 
