@@ -13,14 +13,16 @@ import os
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Quick-start development settings - unsuitable for production
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-zo_duae^-o^0&jgm0ola2h%qb1@s%uzo45y*5++9o7cdv8t1s('  # TODO: use env var in prod
+# Consider: SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
+SECRET_KEY = 'django-insecure-zo_duae^-o^0&jgm0ola2h%qb1@s%uzo45y*5++9o7cdv8t1s('
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# --- Production toggles ---
+DEBUG = False
 
-ALLOWED_HOSTS: list[str] = []  # set hosts/IPs in prod
+ALLOWED_HOSTS = ["umikt-communication.tech", "www.umikt-communication.tech", "20.40.152.176", "127.0.0.1", "localhost"]
+
+
 
 # Application definition
 INSTALLED_APPS = [
@@ -69,7 +71,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'webrtc.wsgi.application'
 ASGI_APPLICATION = 'webrtc.asgi.application'
 
-# Database (SQLite for local dev)
+# Database (SQLite for local/prod simple use)
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
@@ -77,17 +79,12 @@ DATABASES = {
     }
 }
 
-# Channel layers for WebSocket signaling (in-memory for local dev)
-# Switch to Redis in production.
+# --- Channels -> Redis in prod ---
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer"
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {"hosts": [("127.0.0.1", 6379)]},
     }
-    # Example for prod:
-    # "default": {
-    #     "BACKEND": "channels_redis.core.RedisChannelLayer",
-    #     "CONFIG": {"hosts": [("localhost", 6379)]},
-    # }
 }
 
 # Password validation
@@ -104,13 +101,12 @@ TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
 
-# Static files (CSS, JavaScript, Images)
-STATIC_URL = 'static/'
+# --- Static files ---
+STATIC_URL = "/static/"
 STATICFILES_DIRS = [
     BASE_DIR / 'static',  # project-level static/ (contains css/, js/, etc.)
 ]
-
-STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

@@ -1,28 +1,28 @@
 // --- DOM refs ---
-const localVideo = document.getElementById('localVideo');
+const localVideo  = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
-const joinBtn = document.getElementById('joinBtn');
-const leaveBtn = document.getElementById('leaveBtn');
-const muteBtn = document.getElementById('muteBtn');
-const cameraBtn = document.getElementById('cameraBtn');
-const statusEl = document.getElementById('status');
+const joinBtn     = document.getElementById('joinBtn');
+const leaveBtn    = document.getElementById('leaveBtn');
+const muteBtn     = document.getElementById('muteBtn');
+const cameraBtn   = document.getElementById('cameraBtn');
+const statusEl    = document.getElementById('status');
 
 // --- state ---
-const myId = Math.random().toString(36).slice(2, 10);
+const myId   = Math.random().toString(36).slice(2, 10);
 const roomId = new URLSearchParams(location.search).get('room') || 'webrtc';
 let ws = null;
 let pc = null;
 let localStream = null;
 let isMuted = false;
 let isCameraOff = false;
-let role = null;
 let otherId = null;
+let joined = false; // <-- new
 const pendingRemoteCandidates = [];
 
 const wsScheme = (window.location.protocol === 'https:') ? 'wss' : 'ws';
-const wsUrl = `${wsScheme}://${window.location.host}/ws/signaling/`;
+const wsUrl    = `${wsScheme}://${window.location.host}/ws/signaling/`;
 
-function setStatus(msg) { statusEl.textContent = msg; }
+function setStatus(msg) { if (statusEl) statusEl.textContent = msg; console.log(msg); }
 
 // --- WebSocket setup ---
 function connectWS() {
@@ -30,86 +30,77 @@ function connectWS() {
 
   ws.onopen = () => {
     setStatus('websocket connected');
-    // send a proper join with room + peer id
-    send({ type: 'join' });
+    // DO NOT auto-join here anymore
   };
 
   ws.onmessage = async (event) => {
     const data = JSON.parse(event.data);
-    if (data.from && data.from === myId) return; // ignore own messages that bounce back
+    if (data.from && data.from === myId) return;
 
     switch (data.type) {
-
-      case 'room_full':
-        setStatus('room full');
+      case 'join_ack':
+        setStatus(`joined room ${roomId} as ${myId}`);
         break;
 
-      case 'role':
-        role = data.role; // 'caller' or 'callee'
-        setStatus(`role: ${role}`);
-        ensurePeerConnection();
-        break;
-
-      case 'peer_ready':
-        otherId = data.other;
-        setStatus(`peer: ${otherId} ready`);
-
-        // Caller creates and sends the offer *only when peer is ready*
-        if (role === 'caller') {
-          const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
-          await pc.setLocalDescription(offer);
-          send({ type: 'offer', sdp: pc.localDescription });
-          setStatus('offer sent');
+      case 'peer_joined':
+        if (!joined) { setStatus(`peer ${data.peerId} joined (press Join)`); break; }
+        if (data.peerId && data.peerId !== myId) {
+          otherId = data.peerId;
+          setStatus(`peer ${otherId} joined → creating offer`);
+          await createOffer();
         }
         break;
 
-      case 'offer':
+      case 'peer_left':
+        setStatus(`peer ${data.peerId} left`);
+        teardownPeer();
+        break;
+
+      case 'offer': {
+        if (!joined) { setStatus('offer received (press Join to answer)'); break; }
         otherId = data.from;
         ensurePeerConnection();
-        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        await pc.setRemoteDescription({ type: 'offer', sdp: data.sdp });
+        await flushPendingCandidates();
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        send({ type: 'answer', sdp: pc.localDescription });
-        await flushPendingCandidates();
+        send({ type: 'answer', sdp: answer.sdp, to: otherId });
         setStatus('answer sent');
         break;
+      }
 
       case 'answer':
-        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-        await flushPendingCandidates();
-        setStatus('answer received');
+        if (pc && pc.signalingState !== 'stable') {
+          await pc.setRemoteDescription({ type: 'answer', sdp: data.sdp });
+          await flushPendingCandidates();
+          setStatus('answer received');
+        }
         break;
 
-      case 'ice':
+      case 'candidate':
         if (!pc || !data.candidate) return;
         try {
           const cand = new RTCIceCandidate(data.candidate);
-          if (pc.remoteDescription) {
+          if (pc.remoteDescription && pc.remoteDescription.type) {
             await pc.addIceCandidate(cand);
           } else {
-            // buffer until remote description is set
             pendingRemoteCandidates.push(cand);
           }
         } catch (err) {
           console.error('Error adding ICE candidate', err);
         }
         break;
-
-      case 'leave':
-        teardownPeer();
-        break;
     }
   };
 
-  ws.onclose = () => setStatus('websocket closed');
-  ws.onerror = () => setStatus('websocket error');
+  ws.onclose = () => { setStatus('websocket closed'); teardownPeer(); };
+  ws.onerror = (e) => { console.error('websocket error', e); setStatus('websocket error'); };
 }
 
 function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    // always attach addressing info
     const payload = { roomId, peerId: myId, ...obj };
-    if (!payload.to && otherId) payload.to = otherId; // direct to the other peer if known
+    if (!payload.to && otherId) payload.to = otherId;
     ws.send(JSON.stringify(payload));
   }
 }
@@ -118,30 +109,46 @@ function send(obj) {
 function ensurePeerConnection() {
   if (pc) return;
 
+  // ===== KEEP THIS BLOCK EXACTLY AS REQUESTED =====
   pc = new RTCPeerConnection({
     iceServers: [
-      // Keep your original STUN servers
+      // --- Google STUN fallback (keep these if you want) ---
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
 
-      // OPTIONAL: add your TURN later for reliability across NATs
-      // { urls: 'turn:turn.umikt-communication.tech:3478', username: 'webrtcuser', credential: 'SECRET' },
-      // { urls: 'turn:turn.umikt-communication.tech:3478?transport=tcp', username: 'webrtcuser', credential: 'SECRET' },
-      // { urls: 'turns:turn.umikt-communication.tech:5349', username: 'webrtcuser', credential: 'SECRET' }
+      // --- Your TURN server ---
+      {
+        urls: [
+          'turn:umikt-communication.tech:3478?transport=udp',
+          'turn:umikt-communication.tech:3478?transport=tcp',
+          'turns:umikt-communication.tech:5349?transport=tcp'
+        ],
+        username: 'webrtcuser',
+        credential: 'SuperSecret123'
+      }
     ],
-    // For best performance once TURN is set up, leave policy default ("all")
-    // iceTransportPolicy: "all"
+
+    // For debugging: allow all candidate types (host, srflx, relay)
+    iceTransportPolicy: 'all'
   });
+
+  // --- Debug logs for ICE/signaling states ---
+  pc.onicegatheringstatechange = () => console.log('gathering:', pc.iceGatheringState);
+  pc.oniceconnectionstatechange = () => console.log('ice:', pc.iceConnectionState);
+  pc.onconnectionstatechange = () => console.log('pc:', pc.connectionState);
+  pc.onsignalingstatechange = () => console.log('sig:', pc.signalingState);
 
   pc.onicecandidate = (e) => {
     if (e.candidate) {
-      send({ type: 'ice', candidate: e.candidate });
+      send({ type: 'candidate', candidate: e.candidate });
     }
   };
 
   pc.ontrack = (e) => {
     if (remoteVideo.srcObject !== e.streams[0]) {
       remoteVideo.srcObject = e.streams[0];
+      setStatus('remote stream set');
+      remoteVideo.play().catch(err => console.warn('remote play blocked:', err));
     }
   };
 
@@ -157,10 +164,17 @@ async function flushPendingCandidates() {
   }
 }
 
+async function createOffer() {
+  ensurePeerConnection();
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  send({ type: 'offer', sdp: offer.sdp, to: otherId });
+  setStatus('offer sent');
+}
+
 async function join() {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     connectWS();
-    // tiny wait to ensure ws.onopen ran; in real apps use a proper "opened" promise
     await new Promise((r) => setTimeout(r, 150));
   }
 
@@ -172,21 +186,21 @@ async function join() {
     return;
   }
 
-  ensurePeerConnection();
-
-  // NOTE: we no longer create the offer here.
-  // The offer is created only after we receive 'peer_ready' and if role === 'caller'.
+  joined = true;                 // <-- mark joined
+  send({ type: 'join' });        // <-- send join ONLY now
+  ensurePeerConnection();        // add local tracks to pc
 
   joinBtn.disabled = true;
   leaveBtn.disabled = false;
   muteBtn.disabled = false;
   cameraBtn.disabled = false;
-  setStatus('joined (waiting for peer)');
+  setStatus('joined (waiting for peer)…');
 }
 
 function leave() {
   send({ type: 'leave' });
   teardownPeer(true);
+  joined = false;
 
   joinBtn.disabled = false;
   leaveBtn.disabled = true;
@@ -208,7 +222,6 @@ function teardownPeer(stopMedia = false) {
   }
   remoteVideo.srcObject = null;
   localVideo.srcObject = localStream || null;
-  role = null;
   otherId = null;
   pendingRemoteCandidates.length = 0;
 }
@@ -233,5 +246,5 @@ leaveBtn.addEventListener('click', leave);
 muteBtn.addEventListener('click', toggleMute);
 cameraBtn.addEventListener('click', toggleCamera);
 
-// Connect WS early (safe), real media starts when you click Join
+// Do NOT auto-join; only open WS
 connectWS();

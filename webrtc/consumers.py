@@ -1,97 +1,90 @@
 # webrtc/consumers.py
 import json
-from collections import defaultdict, deque
-from channels.generic.websocket import AsyncWebsocketConsumer
+from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
-# Room state in-memory (fine for local dev / single worker)
-# roomId -> {"peers": {peerId: channel_name}, "order": [peerIds join order], "queues": {peerId: deque}}
-rooms = {}
+class SignalingConsumer(AsyncJsonWebsocketConsumer):
+    """
+    Scalable signaling via Channels groups (Redis). No per-process state.
+    Clients send: {type, roomId, peerId, ...}
+    Server:
+      - on join: add to group, ack join, notify others 'peer_joined'
+      - on leave: notify others 'peer_left'
+      - relay offer/answer/candidate to room; clients filter by 'to'
+    """
 
-def get_room(room_id):
-    if room_id not in rooms:
-        rooms[room_id] = {"peers": {}, "order": [], "queues": defaultdict(deque)}
-    return rooms[room_id]
-
-class SignalingConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         await self.accept()
         self.room_id = None
+        self.group = None
         self.peer_id = None
 
     async def disconnect(self, close_code):
-        if self.room_id and self.peer_id:
-            room = rooms.get(self.room_id)
-            if room:
-                room["peers"].pop(self.peer_id, None)
-                room["queues"].pop(self.peer_id, None)
-                if not room["peers"]:
-                    rooms.pop(self.room_id, None)
+        if self.group:
+            if self.peer_id:
+                await self.channel_layer.group_send(
+                    self.group,
+                    {"type": "peer.left", "peerId": self.peer_id}
+                )
+            await self.channel_layer.group_discard(self.group, self.channel_name)
 
-    async def receive(self, text_data):
-        m = json.loads(text_data)
+    async def receive_json(self, m):
         t = m.get("type")
 
         if t == "join":
-            self.room_id = m.get("roomId", "webrtc")  # default room id
-            self.peer_id = m["peerId"]
-            room = get_room(self.room_id)
+            self.room_id = m.get("roomId", "webrtc")
+            self.peer_id = m.get("peerId")
+            self.group = f"room_{self.room_id}"
 
-            # Only 2 peers per room
-            if len(room["peers"]) >= 2 and self.peer_id not in room["peers"]:
-                await self.send_json({"type": "room_full"})
-                await self.close()
-                return
+            await self.channel_layer.group_add(self.group, self.channel_name)
 
-            # Register peer
-            room["peers"][self.peer_id] = self.channel_name
-            if self.peer_id not in room["order"]:
-                room["order"].append(self.peer_id)
+            # Ack to the joiner
+            await self.send_json({"type": "join_ack", "roomId": self.room_id, "peerId": self.peer_id})
 
-            # Role: first = caller, second = callee
-            role = "caller" if len(room["order"]) == 1 else "callee"
-            await self.send_json({"type": "role", "role": role})
-
-            # When both are in, notify each side who the other is
-            if len(room["peers"]) == 2:
-                a, b = room["order"][0], room["order"][1]
-                await self._send_to_peer(room, a, {"type": "peer_ready", "other": b})
-                await self._send_to_peer(room, b, {"type": "peer_ready", "other": a})
-
-            # Flush any queued messages for this peer
-            q = room["queues"].get(self.peer_id)
-            while q and q:
-                await self.send_json(q.popleft())
+            # Notify others someone joined
+            await self.channel_layer.group_send(
+                self.group,
+                {"type": "peer.joined", "peerId": self.peer_id}
+            )
             return
 
-        # Ignore messages until joined
-        if not self.room_id or not self.peer_id:
+        if t == "leave":
+            if self.group and self.peer_id:
+                await self.channel_layer.group_send(
+                    self.group,
+                    {"type": "peer.left", "peerId": self.peer_id}
+                )
             return
 
-        room = get_room(self.room_id)
-
-        # Route to explicit recipient if provided; otherwise to "the other peer"
-        to_id = m.get("to")
-        if not to_id:
-            others = [pid for pid in room["peers"].keys() if pid != self.peer_id]
-            to_id = others[0] if others else None
-        if not to_id:
+        # For signaling messages, require a known peer and group
+        if not self.group or not self.peer_id:
             return
 
+        # Attach sender and fan out
         m["from"] = self.peer_id
-        await self._relay_or_queue(room, to_id, m)
+        await self.channel_layer.group_send(
+            self.group,
+            {"type": "signal.message", "message": m}
+        )
 
-    async def _send_to_peer(self, room, peer_id, msg):
-        ch = room["peers"].get(peer_id)
-        if ch:
-            await self.channel_layer.send(ch, {"type": "signal.message", "message": msg})
-        else:
-            room["queues"][peer_id].append(msg)
+    # ----- Group event handlers -----
 
-    async def _relay_or_queue(self, room, to_id, msg):
-        if to_id in room["peers"]:
-            await self._send_to_peer(room, to_id, msg)
-        else:
-            room["queues"][to_id].append(msg)
+    async def peer_joined(self, event):
+        # Deliver to everyone except the joiner
+        if event["peerId"] != self.peer_id:
+            await self.send_json({"type": "peer_joined", "peerId": event["peerId"]})
+
+    async def peer_left(self, event):
+        if event["peerId"] != self.peer_id:
+            await self.send_json({"type": "peer_left", "peerId": event["peerId"]})
 
     async def signal_message(self, event):
-        await self.send(text_data=json.dumps(event["message"]))
+        msg = event["message"]
+        # Targeted delivery if 'to' is set
+        to_id = msg.get("to")
+        if to_id and to_id != self.peer_id:
+            return
+        # Avoid echoing back to sender
+        if msg.get("from") == self.peer_id:
+            return
+        await self.send_json(msg)
+
