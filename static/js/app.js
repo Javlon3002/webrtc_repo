@@ -119,12 +119,12 @@ function ensurePeerConnection() {
       // --- Your TURN server ---
       {
         urls: [
-          'turn:umikt-communication.tech:3478?transport=udp',
-          'turn:umikt-communication.tech:3478?transport=tcp',
-          'turns:umikt-communication.tech:5349?transport=tcp'
-        ],
-        username: 'webrtcuser',
-        credential: 'SuperSecret123'
+    'turn:yourdomain.com:3478?transport=udp',
+    'turn:yourdomain.com:3478?transport=tcp',
+    'turns:yourdomain.com:5349?transport=tcp'
+              ],
+    username: 'USERNAME_HERE',
+    credential: 'CREDENTIAL_HERE'
       }
     ],
 
